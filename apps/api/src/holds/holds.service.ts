@@ -1,13 +1,14 @@
-import { Injectable } from '@nestjs/common';
-import { DataSource } from 'typeorm';
-import { holdTtlSeconds, maxTicketsPerUser } from '../database/config';
+import { Injectable } from "@nestjs/common";
+import { DataSource } from "typeorm";
+import { holdTtlSeconds, maxTicketsPerUser } from "../database/config";
+import { SeatTakenError, TicketLimitError } from "./holds.errors";
 
 export interface Hold {
   id: string;
   eventId: string;
   seatId: string;
   userId: string;
-  status: 'held' | 'payment_pending' | 'booked' | 'expired' | 'released';
+  status: "held" | "payment_pending" | "booked" | "expired" | "released";
   expiresAt: Date;
 }
 
@@ -18,11 +19,83 @@ export class HoldsService {
   readonly ttlSeconds = holdTtlSeconds();
   readonly maxTickets = maxTicketsPerUser();
 
-  async holdSeat(userId: string, eventId: string, seatId: string): Promise<Hold> {
-    throw new Error('Not implemented');
+  async holdSeat(
+    userId: string,
+    eventId: string,
+    seatId: string
+  ): Promise<Hold> {
+    return await this.db.transaction(async (entityManager) => {
+      const rows = await entityManager.query(
+        `
+        INSERT INTO quotas (user_id, event_id, count) VALUES ($1, $2, 1)
+            ON CONFLICT (user_id, event_id) DO UPDATE
+           SET count = quotas.count + 1
+         WHERE quotas.count < $3
+        RETURNING count;
+          `,
+        [userId, eventId, this.maxTickets]
+      );
+
+      if (rows.length === 0) throw new TicketLimitError(this.maxTickets);
+
+      let hold;
+      const expiresAt = new Date(Date.now() + this.ttlSeconds * 1000);
+      try {
+        const [{ id, user_id, event_id, seat_id, expires_at, status }] =
+          await entityManager.query(
+            `
+             INSERT INTO holds (user_id, event_id, seat_id, expires_at, status)
+             VALUES ($1, $2, $3, $4, $5)
+          RETURNING *;
+          `,
+            [userId, eventId, seatId, expiresAt, "held"]
+          );
+
+        hold = {
+          id,
+          userId: user_id,
+          eventId: event_id,
+          seatId: seat_id,
+          expiresAt: expires_at,
+          status: status,
+        };
+      } catch (error: any) {
+        if (error.code === "23505") {
+          throw new SeatTakenError(seatId);
+        } else throw error;
+      }
+
+      return hold;
+    });
   }
 
   async expireStaleHolds(now: Date = new Date()): Promise<number> {
-    throw new Error('Not implemented');
+    return await this.db.transaction(async (entityManager) => {
+      const [{ expired }] = await entityManager.query(
+        `
+        WITH expired AS (
+          UPDATE holds
+             SET status = 'expired', updated_at = now()
+           WHERE status = 'held' AND expires_at < $1
+          RETURNING user_id, event_id
+        ),
+        per_user AS (
+          SELECT user_id, event_id, count(*)::int AS n
+            FROM expired
+          GROUP BY user_id, event_id
+        ),
+        returned AS (
+          UPDATE quotas q
+             SET count = q.count - p.n
+            FROM per_user p
+           WHERE q.user_id = p.user_id AND q.event_id = p.event_id
+        )
+        SELECT count(*)::int AS expired from expired;
+        `,
+        [now]
+      );
+
+      return expired;
+    });
   }
 }
