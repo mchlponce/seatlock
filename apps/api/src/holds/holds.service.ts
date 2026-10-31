@@ -2,15 +2,8 @@ import { Injectable } from "@nestjs/common";
 import { DataSource } from "typeorm";
 import { holdTtlSeconds, maxTicketsPerUser } from "../database/config";
 import { SeatTakenError, TicketLimitError } from "./holds.errors";
-
-export interface Hold {
-  id: string;
-  eventId: string;
-  seatId: string;
-  userId: string;
-  status: "held" | "payment_pending" | "booked" | "expired" | "released";
-  expiresAt: Date;
-}
+import { Hold, HoldRow, toHold } from "./holds.model";
+import { query } from "../database/helper";
 
 @Injectable()
 export class HoldsService {
@@ -38,34 +31,24 @@ export class HoldsService {
 
       if (rows.length === 0) throw new TicketLimitError(this.maxTickets);
 
-      let hold;
       const expiresAt = new Date(Date.now() + this.ttlSeconds * 1000);
       try {
-        const [{ id, user_id, event_id, seat_id, expires_at, status }] =
-          await entityManager.query(
-            `
+        const [holdRow] = await query<HoldRow>(
+          entityManager,
+          `
              INSERT INTO holds (user_id, event_id, seat_id, expires_at, status)
              VALUES ($1, $2, $3, $4, $5)
-          RETURNING *;
-          `,
-            [userId, eventId, seatId, expiresAt, "held"]
-          );
+                    RETURNING *;
+            `,
+          [userId, eventId, seatId, expiresAt, "held"]
+        );
 
-        hold = {
-          id,
-          userId: user_id,
-          eventId: event_id,
-          seatId: seat_id,
-          expiresAt: expires_at,
-          status: status,
-        };
+        return toHold(holdRow);
       } catch (error: any) {
         if (error.code === "23505") {
           throw new SeatTakenError(seatId);
         } else throw error;
       }
-
-      return hold;
     });
   }
 
