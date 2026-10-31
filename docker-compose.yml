@@ -1,3 +1,17 @@
+x-api: &api
+  build:
+    context: .
+    dockerfile: apps/api/Dockerfile
+  image: seatlock-api
+  profiles: ["app"]
+  environment:
+    DB_HOST: db
+    DB_PORT: "5432"
+    DB_USER: seatlock
+    DB_PASSWORD: seatlock
+    DB_NAME: seatlock
+    DB_SSL: "false"
+
 services:
   db:
     image: postgres:16
@@ -14,6 +28,34 @@ services:
       retries: 20
     volumes:
       - pgdata:/var/lib/postgresql/data
+
+  migrate:
+    <<: *api
+    command: ["node", "dist/database/migrate.js"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    <<: *api
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *api
+    command: ["node", "dist/worker.js"]
+    stop_grace_period: 30s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:

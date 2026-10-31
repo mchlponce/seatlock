@@ -10,6 +10,8 @@
   "scripts": {
     "db:up": "docker compose up -d db",
     "db:down": "docker compose down",
+    "stack:up": "docker compose --profile app up --build",
+    "stack:down": "docker compose --profile app down",
     "migrate": "npm run migrate -w apps/api",
     "dev:api": "npm run start:dev -w apps/api",
     "dev:web": "npm run dev -w apps/web",

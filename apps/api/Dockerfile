@@ -11,7 +11,7 @@ FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /repo/node_modules ./node_modules
-COPY --from=build /repo/apps/api/dist ./dist
+COPY --from=build --chown=node:node /repo/apps/api/dist ./dist
 COPY --from=build /repo/apps/api/package.json ./
 USER node
 EXPOSE 3000
