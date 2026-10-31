@@ -5,6 +5,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { databaseUrl } from './database/config';
 import { EventsModule } from './events/events.module';
 import { HoldsModule } from './holds/holds.module';
+import { PaymentsModule } from './payments/payments.module';
 import { HealthController } from './health.controller';
 
 @Module({
@@ -18,6 +19,7 @@ import { HealthController } from './health.controller';
     }),
     EventsModule,
     HoldsModule,
+    PaymentsModule,
   ],
   controllers: [HealthController],
 })
