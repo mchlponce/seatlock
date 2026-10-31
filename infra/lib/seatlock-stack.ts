@@ -2,6 +2,11 @@ import { RemovalPolicy, Stack, StackProps, Tags } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as rds from "aws-cdk-lib/aws-rds";
+import * as ecs from "aws-cdk-lib/aws-ecs";
+import * as ecsPatterns from "aws-cdk-lib/aws-ecs-patterns";
+import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
+import { Platform } from "aws-cdk-lib/aws-ecr-assets";
+import * as path from "path";
 
 export class SeatlockStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
@@ -9,8 +14,9 @@ export class SeatlockStack extends Stack {
     Tags.of(this).add("project", "seatlock");
 
     const vpc = this.createNetwork();
-    const { dbSg } = this.createSecurityGroups(vpc);
-    this.createDatabase(vpc, dbSg);
+    const { dbSg, albSg, apiSg } = this.createSecurityGroups(vpc);
+    const db = this.createDatabase(vpc, dbSg);
+    this.createApiService(vpc, albSg, apiSg, db);
   }
 
   private createNetwork(): ec2.Vpc {
@@ -42,7 +48,10 @@ export class SeatlockStack extends Stack {
     return { albSg, apiSg, workerSg, dbSg } as const;
   }
 
-  private createDatabase(vpc: ec2.Vpc, dbSg: ec2.SecurityGroup) {
+  private createDatabase(
+    vpc: ec2.Vpc,
+    dbSg: ec2.SecurityGroup
+  ): rds.DatabaseInstance {
     return new rds.DatabaseInstance(this, "Database", {
       vpc,
       engine: rds.DatabaseInstanceEngine.postgres({
@@ -62,5 +71,62 @@ export class SeatlockStack extends Stack {
       deletionProtection: false,
       storageEncrypted: true,
     });
+  }
+
+  private createApiService(
+    vpc: ec2.Vpc,
+    albSg: ec2.SecurityGroup,
+    apiSg: ec2.SecurityGroup,
+    db: rds.DatabaseInstance
+  ) {
+    const cluster = new ecs.Cluster(this, "Cluster", { vpc });
+    const loadBalancer = new elbv2.ApplicationLoadBalancer(this, "Alb", {
+      vpc,
+      internetFacing: true,
+      securityGroup: albSg,
+    });
+
+    const service = new ecsPatterns.ApplicationLoadBalancedFargateService(
+      this,
+      "Api",
+      {
+        cluster,
+        loadBalancer,
+        openListener: false,
+        cpu: 256,
+        memoryLimitMiB: 512,
+        desiredCount: 1,
+        runtimePlatform: {
+          cpuArchitecture: ecs.CpuArchitecture.ARM64,
+          operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+        },
+        taskSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+        assignPublicIp: true,
+        securityGroups: [apiSg],
+        circuitBreaker: { rollback: true },
+        minHealthyPercent: 100,
+        maxHealthyPercent: 200,
+        taskImageOptions: {
+          image: ecs.ContainerImage.fromAsset(path.join(__dirname, "../.."), {
+            file: "apps/api/Dockerfile",
+            platform: Platform.LINUX_ARM64,
+          }),
+          containerPort: 3000,
+          environment: {
+            DB_HOST: db.dbInstanceEndpointAddress,
+            DB_PORT: db.dbInstanceEndpointPort,
+            DB_NAME: "seatlock",
+            DB_SSL: "true",
+          },
+          secrets: {
+            DB_USER: ecs.Secret.fromSecretsManager(db.secret!, "username"),
+            DB_PASSWORD: ecs.Secret.fromSecretsManager(db.secret!, "password"),
+          },
+        },
+      }
+    );
+    service.targetGroup.configureHealthCheck({ path: "/health" });
+
+    return service;
   }
 }

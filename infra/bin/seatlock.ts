@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-import { App } from 'aws-cdk-lib';
-import { SeatlockStack } from '../lib/seatlock-stack';
+import { App } from "aws-cdk-lib";
+import { SeatlockStack } from "../lib/seatlock-stack";
 
 const app = new App();
 
-new SeatlockStack(app, 'Seatlock-Dev', {
+new SeatlockStack(app, "Seatlock-Dev", {
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
-    region: process.env.CDK_DEFAULT_REGION ?? 'ap-southeast-1',
+    region: "ap-southeast-1",
   },
 });
