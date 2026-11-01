@@ -273,9 +273,8 @@ export class PaymentsService {
 
     let expiredCount = 0;
     for (const paymentRow of paymentRows) {
-      const decision = await this.getExpirePaymentsDecision(
-        paymentRow.provider_ref
-      );
+      const { id, provider_ref } = paymentRow;
+      const decision = await this.getExpirePaymentDecision(provider_ref);
 
       switch (decision) {
         case "skip":
@@ -284,7 +283,7 @@ export class PaymentsService {
           await this.createMissingPayment(paymentRow);
           break;
         case "expire_payment": {
-          const expired = await this.expirePendingPayment(paymentRow.id);
+          const expired = await this.expirePendingPayment(id);
           expiredCount += expired;
         }
       }
@@ -438,7 +437,7 @@ export class PaymentsService {
     return "mark_event_processed";
   }
 
-  private async getExpirePaymentsDecision(paymentRef: string | null) {
+  private async getExpirePaymentDecision(paymentRef: string | null) {
     if (!paymentRef) return "create_payment";
 
     try {
