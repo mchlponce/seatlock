@@ -3,6 +3,7 @@ import { DataSource, EntityManager } from "typeorm";
 import {
   PAYMENT_PROVIDER,
   PaymentProvider,
+  ProviderPaymentStatus,
   ProviderWebhookEvent,
 } from "./payment-provider";
 import { HoldNotPayableError } from "./payments.errors";
@@ -190,7 +191,7 @@ export class PaymentsService {
           return "deferred";
         }
 
-        const decision = this.getProcessDecision(
+        const decision = this.getProcessInboxDecision(
           payment.status,
           payload.status
         );
@@ -207,7 +208,7 @@ export class PaymentsService {
             break;
           case "release_seats":
             // Payment failed, release seats, and decrease quota.
-            await this.releaseSeats(
+            await this.releaseSeatsByWebhookEvent(
               entityManager,
               payment.id,
               provider_event_id
@@ -252,8 +253,44 @@ export class PaymentsService {
     return processed;
   }
 
-  async expirePendingPayments(now: Date = new Date()): Promise<number> {
-    throw new Error("Not implemented");
+  async expirePendingPayments(
+    now: Date = new Date(),
+    batchSize = 50
+  ): Promise<number> {
+    const paymentRows = await query<PaymentRow>(
+      this.db.manager,
+      `
+      SELECT * FROM payments
+       WHERE status = 'pending'
+         AND expires_at < $1
+       ORDER BY expires_at
+       LIMIT $2;
+      `,
+      [now, batchSize]
+    );
+
+    if (!paymentRows.length) return 0;
+
+    let expiredCount = 0;
+    for (const paymentRow of paymentRows) {
+      const decision = await this.getExpirePaymentsDecision(
+        paymentRow.provider_ref
+      );
+
+      switch (decision) {
+        case "skip":
+          continue;
+        case "create_payment":
+          await this.createMissingPayment(paymentRow);
+          break;
+        case "expire_payment": {
+          const expired = await this.expirePendingPayment(paymentRow.id);
+          expiredCount += expired;
+        }
+      }
+    }
+
+    return expiredCount;
   }
 
   private async bookSeats(
@@ -295,7 +332,7 @@ export class PaymentsService {
   private async releaseSeats(
     entityManager: EntityManager,
     paymentId: string,
-    eventId: string
+    paymentStatus: PaymentRow["status"]
   ) {
     await entityManager.query(
       `
@@ -318,13 +355,27 @@ export class PaymentsService {
     await entityManager.query(
       `
       UPDATE payments
-         SET status = 'failed'
+         SET status = $2
        WHERE id = $1
          AND status = 'pending';
       `,
-      [paymentId]
+      [paymentId, paymentStatus]
     );
+  }
 
+  private async releaseSeatsByExpiration(
+    entityManager: EntityManager,
+    paymentId: string
+  ) {
+    await this.releaseSeats(entityManager, paymentId, "expired");
+  }
+
+  private async releaseSeatsByWebhookEvent(
+    entityManager: EntityManager,
+    paymentId: string,
+    eventId: string
+  ) {
+    await this.releaseSeats(entityManager, paymentId, "failed");
     await entityManager.query(
       `
       UPDATE webhook_events
@@ -373,7 +424,7 @@ export class PaymentsService {
     );
   }
 
-  private getProcessDecision(
+  private getProcessInboxDecision(
     paymentStatus: Payment["status"],
     webhookStatus: ProviderWebhookEvent["status"]
   ) {
@@ -385,6 +436,20 @@ export class PaymentsService {
       return "refund_payment";
 
     return "mark_event_processed";
+  }
+
+  private async getExpirePaymentsDecision(paymentRef: string | null) {
+    if (!paymentRef) return "create_payment";
+
+    try {
+      const status = await this.provider.getPaymentStatus(paymentRef);
+      if (status === "succeeded") return "skip";
+      if (status === "failed" || status === "pending") return "expire_payment";
+    } catch (error: any) {
+      console.error("unable to retrieve payment status", error);
+    }
+
+    return "skip";
   }
 
   private async lockOneUnprocessedEvent(entityManager: EntityManager) {
@@ -432,5 +497,51 @@ export class PaymentsService {
       `,
       [message, eventId]
     );
+  }
+
+  private async createMissingPayment(paymentRow: PaymentRow) {
+    const { id, idempotencyKey, amountMinor, currency } = toPayment(paymentRow);
+
+    try {
+      const { paymentRef } = await this.provider.createPayment({
+        idempotencyKey,
+        amountMinor,
+        currency,
+      });
+
+      await this.db.query(
+        `
+        UPDATE payments
+           SET provider_ref = $2
+         WHERE id = $1
+           AND status = 'pending'
+           AND provider_ref IS NULL;
+        `,
+        [id, paymentRef]
+      );
+    } catch (error) {
+      console.error("Unable to create payment", error);
+    }
+  }
+
+  private async expirePendingPayment(paymentId: string) {
+    return await this.db.transaction(async (entityManager) => {
+      const [paymentRow] = await query<PaymentRow>(
+        entityManager,
+        ` 
+      SELECT * FROM payments
+       WHERE status = 'pending'
+         AND id = $1
+         FOR UPDATE;
+      `,
+        [paymentId]
+      );
+
+      if (!paymentRow) return 0;
+
+      await this.releaseSeatsByExpiration(entityManager, paymentId);
+
+      return 1;
+    });
   }
 }

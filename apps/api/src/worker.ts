@@ -40,6 +40,12 @@ class Worker {
     } catch (error: any) {
       console.error("Expiring stale holds failed", error.message);
     }
+
+    try {
+      await this.payments.expirePendingPayments();
+    } catch (error: any) {
+      console.error("Expiring pending payments failed", error.message);
+    }
   }
 
   private sleep(ms: number): Promise<void> {

@@ -9,6 +9,7 @@ export interface Payment {
   status: "pending" | "succeeded" | "failed" | "expired" | "refunded";
   providerRef: string | null;
   expiresAt: Date;
+  idempotencyKey: string;
 }
 
 export type PaymentRow = {
@@ -20,6 +21,7 @@ export type PaymentRow = {
   status: "pending" | "succeeded" | "failed" | "expired" | "refunded";
   provider_ref: string | null;
   expires_at: Date;
+  idempotency_key: string;
 };
 
 export type WebhookEventRow = {
@@ -45,4 +47,5 @@ export const toPayment = ({
   amountMinor: p.amount_minor,
   expiresAt: p.expires_at,
   providerRef: p.provider_ref,
+  idempotencyKey: p.idempotency_key,
 });
