@@ -112,10 +112,7 @@ export class SeatlockStack extends Stack {
         cpu: 256,
         memoryLimitMiB: 512,
         desiredCount: 1,
-        runtimePlatform: {
-          cpuArchitecture: ecs.CpuArchitecture.ARM64,
-          operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
-        },
+        runtimePlatform: this.runtimePlatform(),
         taskSubnets: { subnetType: ec2.SubnetType.PUBLIC },
         assignPublicIp: true,
         securityGroups: [apiSg],
@@ -146,10 +143,7 @@ export class SeatlockStack extends Stack {
       {
         cpu: 256,
         memoryLimitMiB: 512,
-        runtimePlatform: {
-          cpuArchitecture: ecs.CpuArchitecture.ARM64,
-          operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
-        },
+        runtimePlatform: this.runtimePlatform(),
       }
     );
     taskDefinition.addContainer("worker", {
@@ -183,10 +177,7 @@ export class SeatlockStack extends Stack {
       {
         cpu: 256,
         memoryLimitMiB: 512,
-        runtimePlatform: {
-          cpuArchitecture: ecs.CpuArchitecture.ARM64,
-          operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
-        },
+        runtimePlatform: this.runtimePlatform(),
       }
     );
     taskDefinition.addContainer("migrate", {
@@ -195,7 +186,6 @@ export class SeatlockStack extends Stack {
       environment: this.dbEnvironment(db),
       secrets: this.dbSecrets(db),
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: "migrate" }),
-      stopTimeout: Duration.seconds(30),
     });
 
     return taskDefinition;
@@ -225,6 +215,13 @@ export class SeatlockStack extends Stack {
     return {
       DB_USER: ecs.Secret.fromSecretsManager(db.secret!, "username"),
       DB_PASSWORD: ecs.Secret.fromSecretsManager(db.secret!, "password"),
+    } as const;
+  }
+
+  private runtimePlatform() {
+    return {
+      cpuArchitecture: ecs.CpuArchitecture.ARM64,
+      operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
     } as const;
   }
 }
